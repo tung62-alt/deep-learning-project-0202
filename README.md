@@ -43,7 +43,7 @@
 
 ---
 
-## 方法總覽（Stage 2–5）
+## 方法1（Self-Learning (Pipeline)）
 
 本專案的訓練管線（pipeline）重點是：**先降低髒資料污染**，再用自我訓練與未標註偽標註擴增資料量，最後用 curriculum 方式回到高品質 gold 分佈收斂。
 
@@ -99,6 +99,45 @@
 - `--do_infer`：輸出 submission
 - `--bf16`：使用 bf16（視硬體支援）
 
+---
+## 方法2(LLM 產生資料 -> 回灌 ByT5)
+### 1) 我用 LLM 做了什麼？
+
+- **模型**：指令式 LLM（預設 `Qwen/Qwen2.5-7B-Instruct`）作為翻譯器。  
+- **腳本**：`llm_lora_pseudo.py`
+- **訓練方式**：使用 **4-bit 量化 + LoRA** 做參數高效率微調（PEFT），並使用 **TRL 的 `SFTTrainer`** 進行監督式微調（SFT），讓 LLM 更貼近「阿卡德語轉寫 → 流暢英文」的輸出風格與規則。  
+- **Prompt 設計**：明確限制：
+  - **只輸出英文翻譯**
+  - **不要評論/不要解釋**
+  - **保留專有名詞（必要時原樣保留）**  
+  以提升生成結果的可用性與一致性。
+
+---
+
+### 2) LLM 產生哪些資料？
+
+- **輸入**：unlabeled transliteration（未標註轉寫資料）
+- **輸出**：對應的 **英文 pseudo label**（LLM 生成翻譯）
+
+生成後會做基本品質控管（皆在 `llm_lora_pseudo.py` 中實作）：
+
+- **格式一致化**：沿用既有清理流程 `clean_x / clean_y`，確保輸入/輸出格式統一、減少噪聲。
+- **粗過濾 bad outputs**：過濾太短、幾乎全是符號/省略號等「不可用文本」（`is_bad_text`）。
+
+最後輸出成檔案（作為後續訓練資料來源）：
+- `unlabeled_{A/B}_llm_pseudo.csv`
+
+---
+
+### 3) 為什麼最後要丟回 ByT5 做實驗？
+
+本專案的**主模型仍是 ByT5（seq2seq Transformer, byte-level / token-free）**；LLM 在此扮演的是「資料產生器」，而不是最後的交付模型。
+
+- **LLM 的角色（Data Generator）**：  
+  利用較強的生成能力，在低資源情境下替 unlabeled 資料補上「高可用的英文翻譯」（pseudo labels），藉此擴充訓練樣本數與語料多樣性。
+
+- **ByT5 的角色（Final Model）**：  
+  將 `gold + repaired + pseudo（含 LLM pseudo）` 整合後，回到原本的 ByT5 pipeline 進行最終訓練與評估，讓最終模型仍維持 ByT5 的 **token-free/byte-level 優勢**與更穩定的輸出行為（對符號密集轉寫輸入更友善）。
 ---
 
 ## 安裝環境
